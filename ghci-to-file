@@ -1,0 +1,55 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import argparse
+import subprocess
+import sys
+import ghci_lib
+from common import *
+
+def parse_args(args):
+    parser = argparse.ArgumentParser(description=
+                                     'Filter ghci output and write output also to a file.')
+    parser.add_argument('--output-file', dest='output_file', metavar='FILE', required=True,
+                        help='Name of the file where the processed ghci otuput is written to.')
+    parser.add_argument('ghci', nargs='+')
+    opts = parser.parse_args(args)
+    return opts
+
+def read_loop(in_handle, out_path):
+    file = open(out_path, 'a')
+    while True:
+        line = in_handle.readline()
+        line = ghci_lib.filter_ghci_line(line)
+        sys.stdout.write(line)
+        file.write(line)
+        file.flush()
+
+def main():
+    init_logging('ghci-to-file')
+    opts = parse_args(sys.argv[1:])
+    cmd = opts.ghci
+    try:
+        ghci_process = subprocess.Popen(cmd,
+                                        bufsize=0,
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT)
+    except Exception, e:
+        prog = cmd[0]
+        args = cmd[1:]
+        sys.stderr.write("Could not start process %s with arguments %s: %s\n" % (prog, args, e))
+        sys.exit(1)
+    fork_thread('read_loop', lambda: read_loop(ghci_process.stdout, opts.output_file))
+    ecode = None
+    while ecode is None:
+        try:
+            ghci_process.wait()
+            ecode = 1
+            if ghci_process.returncode == 0:
+                ecode = 0
+            sys.exit(ecode)
+        except KeyboardInterrupt, e:
+            ghci_process.terminate()
+
+if __name__ == '__main__':
+    main()

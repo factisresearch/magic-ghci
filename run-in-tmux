@@ -1,0 +1,17 @@
+#!/bin/bash
+
+WAIT_SECS=60
+
+start=$(date '+%s')
+"$@"
+ecode=$?
+end=$(date '+%s')
+delta=$(($end - $start))
+
+if [ $delta -lt 5 ]; then
+   echo "Command \"$@\" ran only for $delta seconds and finished with exit code $ecode"
+   echo "I will now wait for $WAIT_SECS seconds, press Ctrl-C to terminate."
+   sleep $WAIT_SECS
+fi
+
+exit $ecode

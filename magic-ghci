@@ -1,0 +1,128 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
+
+import argparse
+import subprocess
+import sys
+import os
+import BaseHTTPServer
+import tempfile
+import time
+import random
+from common import *
+import ghci_lib
+
+DEFAULT_PORT = 7999
+
+def parse_args(args):
+    parser = argparse.ArgumentParser(description=
+                                     'Start ghci and allow remote controlling via HTTP.')
+    parser.add_argument('--port', dest='port', metavar='PORT', required=False, type=int,
+                        help='Port for the webserver (default: %d)' % DEFAULT_PORT)
+    parser.add_argument('ghci', nargs='+', metavar='GHCI_WITH_OPTIONS')
+    opts = parser.parse_args(args)
+    return opts
+
+global_ghci_sender = None
+
+class GhciSender:
+    def __init__(self, tmux_session, out_file):
+        self.tmux_session = tmux_session
+        self.out_file = out_file
+        self.ghci_lock = threading.Lock()
+
+    def send_to_tmux(self, cmd, literal=True):
+        lit = []
+        if literal:
+            lit = ['-l']
+        ecode = subprocess.call(['tmux', 'send-keys', '-t', self.tmux_session] + lit + [cmd])
+        if ecode != 0:
+            raise Exception("Communication with tmux failed, exit code: %d" % ecode)
+
+    def send_to_ghci(self, cmd, write_fun):
+        with self.ghci_lock:
+            r = random.randint(0, 1000000000)
+            t = time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime())
+            magic_start = "__MAGIC_START_%s_%s__" % (r, t)
+            magic_end = "__MAGIC_END_%s_%s__" % (r, t)
+            self.send_to_tmux('Enter', literal=False)
+            self.send_to_tmux('putStrLn "%s"' % magic_start)
+            self.send_to_tmux('Enter', literal=False)
+            self.send_to_tmux(cmd)
+            self.send_to_tmux('Enter', literal=False)
+            self.send_to_tmux('putStrLn "%s"' % magic_end)
+            self.send_to_tmux('Enter', literal=False)
+            inside = False
+            while True:
+                line = self.out_file.readline()
+                debug('Read line from ghci: %r' % line)
+                if line.strip() == magic_start:
+                    inside = True
+                elif line.strip() == magic_end:
+                    return
+                elif inside:
+                    write_fun(line)
+
+class GhciHttpHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+
+    def log_message(format, *rest):
+        pass
+
+    def do_POST(self):
+        debug('Got HTTP request %s' % self.requestline)
+        cmd = self.path
+        if cmd:
+            cmd = cmd[1:]
+        self.send_response(200)
+        self.end_headers()
+        def write(s):
+            debug('Sending via HTTP: %s' % repr(s))
+            self.wfile.write(s)
+        global_ghci_sender.send_to_ghci(cmd, write)
+        self.wfile.flush()
+
+def run_server(port):
+    debug('Starting HTTP server on port %d' % port)
+    server_address = ('', port)
+    BaseHTTPServer.HTTPServer.allow_reuse_address = True
+    httpd = BaseHTTPServer.HTTPServer(server_address, GhciHttpHandler)
+    httpd.serve_forever()
+
+def run_tmux(session_name, outfile_name, ghci):
+    this_dir = os.path.dirname(os.path.realpath(__file__))
+    cmd = ['tmux', 'new-session', '-s', session_name,
+           'bash', os.path.join(this_dir, 'run-in-tmux'),
+           'python', os.path.join(this_dir, 'ghci-to-file'),
+           '--output-file', outfile_name, '--'] + ghci
+    debug('Starting tmux: %s' % cmd)
+    tmux_proc = subprocess.Popen(cmd)
+    tmux_res = fork_thread('tmux_wait', lambda: tmux_proc.wait(), daemon=False)
+    return (tmux_proc, tmux_res)
+
+def main():
+    global global_ghci_sender
+    init_logging('magic-ghci')
+    debug('magic-ghci started')
+    opts = parse_args(sys.argv[1:])
+    port = opts.port or DEFAULT_PORT
+    suffix = '_magic-ghci'
+    with tempfile.NamedTemporaryFile(suffix=suffix) as tmp_file:
+        session_name = 'magic-ghci_' + os.path.basename(tmp_file.name)[:-len(suffix)]
+        debug('output_file=%s, session_name=%s' % (tmp_file.name, session_name))
+        global_ghci_sender = GhciSender(session_name, tmp_file)
+        server_res = fork_thread('http_server', lambda: run_server(port), daemon=True)
+        (tmux_proc, tmux_res) = run_tmux(session_name, tmp_file.name, opts.ghci)
+        while True:
+            (done, res) = wait_for_thread_results([server_res, tmux_res], 0.05)
+            if done:
+                debug('Finished with %s' % res)
+                ecode = 1 if res.is_exception else 0
+                if res is tmux_res:
+                    if not res.is_exception:
+                        ecode = res.result
+                else:
+                    tmux_proc.terminate()
+                sys.exit(ecode)
+
+if __name__ == '__main__':
+    main()
