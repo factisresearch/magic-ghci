@@ -6,7 +6,7 @@ and via HTTP requests.
 Usage:
 
 * Run magic-ghci: `./magic-ghci GHCI_COMMAND GHCI_OPTIONS...`
-* Use ghci from the terminal.
+* Enter commands interactively, as usual.
 * Use HTTP requests to remote control ghci. Examples:
   * Send reload command: `curl --silent --data '' --no-buffer http://localhost:7999/:r`
   * Eval expression `foo 42`: `curl --silent --data '' --no-buffer http://localhost:7999/foo%2042`
