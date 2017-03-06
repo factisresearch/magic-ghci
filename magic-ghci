@@ -9,6 +9,7 @@ import BaseHTTPServer
 import tempfile
 import time
 import random
+import urllib
 from common import *
 import ghci_lib
 
@@ -62,6 +63,8 @@ class GhciSender:
                     return
                 elif inside:
                     write_fun(line)
+                if not line:
+                    time.sleep(0.001)
 
 class GhciHttpHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
@@ -73,6 +76,8 @@ class GhciHttpHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         cmd = self.path
         if cmd:
             cmd = cmd[1:]
+        cmd = urllib.unquote(cmd)
+        debug('Received ghci command: %s' % cmd)
         self.send_response(200)
         self.end_headers()
         def write(s):
